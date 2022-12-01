@@ -1,0 +1,10 @@
+Package: cybrBSA
+Type: Package
+Title: Bulk Segregant Analysis using Logistic Regression
+Version: 0.1.0
+Author: Cassandra Y Buzby
+Maintainer: The package maintainer <cassandra.buzby@nyu.edu>
+Description: Converts a GATK VCF table into dataframe of logistic regression Z-scores with capability of plotting. Designed for yeast aligned to S288C genome in a two-parent cross, but can take any organism and multiple parents.
+License: What license is it under?
+Encoding: UTF-8
+LazyData: true
