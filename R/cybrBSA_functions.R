@@ -20,7 +20,35 @@ ChromKey <- data.frame(chromosomes = c("I", "II", "III", "IV", "V", "VI", "VII",
 
 ################################################################################
 ## Functions
+cybr_BSAcolors = c("#345F6F","#D7335C","#FFB05C",
+                   "black",
+                   "gray",
+                   "#f7dcfa",
+                   "#d0eaf5",
+                   "#cce3d6",
+                   "#fcd7df",
+                   "#a32a02")
 
+cybr_CHROMcolors =c("#F26430", "#0A369D", "#7EA3CC","#FF9F1C", "#C14953","#92DCE5", "#8FC93A","#4C4C47",
+                      "#F26430", "#0A369D", "#7EA3CC","#FF9F1C", "#C14953","#92DCE5", "#8FC93A","#4C4C47",
+                      "#F26430", "#0A369D", "#7EA3CC","#FF9F1C", "#C14953","#92DCE5", "#8FC93A","#4C4C47")
+
+
+theme_cybr <- function(base_size = 11,
+                       base_family = "",
+                       base_line_size = base_size/22,
+                       base_rect_size = base_size/22){
+
+  #theme_minimal
+  theme_bw(base_size = base_size, base_family = base_family,
+           base_line_size = base_line_size, base_rect_size = base_rect_size) %+replace%
+    theme(axis.ticks = element_blank(), legend.background = element_blank(),
+          legend.key = element_blank(), panel.background = element_blank(),
+          panel.border = element_blank(), strip.background = element_blank(),
+          plot.background = element_blank(),
+          #FROM MY PLOTS
+          legend.position = "bottom", #axis.text.x=element_blank(),
+          axis.ticks.x=element_blank())}
 
 cybrInputGATKTable <- function(rawData, yeast = TRUE){
 
@@ -311,6 +339,50 @@ cybrSmoothBSAWindows_b <- function(Results, windowsize = 100, chr = unique(Resul
   }
 }
 
+cybrSmoothBSAWindows_Med <- function(Results, windowsize = 100, chr = unique(Results$CHROM)[1]){
+
+  #extract parameters
+  Results %>% select(-CHROM, -POS) %>% names() -> params
+
+  #arrange by position
+  Results %>% filter(CHROM == chr) %>% arrange(POS) -> Results
+
+  Results %>% summarise(SNPs = length(unique(POS))) %>%
+    distinct() %>%
+    mutate(maxW = floor(SNPs/2)) -> tablecounts
+
+  if(windowsize < tablecounts$maxW){
+    #run window
+    WResult <- foreach(i=windowsize+1:(length(Results$POS) - (2*windowsize)), .combine=rbind) %dopar% {
+
+      smoothedparams <- vector()
+      for(p in 1:length(params)){
+        smoothedparams[p] <- median(Results[[params[p]]][(i-windowsize):(i+windowsize)])
+      }
+
+      #print CHROM, index, POS, and mean
+      unlist(c(chr, i, Results[i,2:(2+length(params))],smoothedparams))
+    }
+
+    #rename columns
+    WResult <- as.data.frame(WResult)
+    colnames(WResult) <- c("CHROM", "Index", "POS",
+                           paste(params, "Z", sep = "_"),
+                           paste(params, "Zprime", sep = "_"))
+
+    #convert to numeric
+    for(i in 2:length(colnames(WResult))){
+      WResult[,i] <- as.numeric(WResult[,i])
+    }
+    return(WResult)
+  }else{
+    return(NA)
+    warning(paste("Window size of chromosome ", chr, "are larger than number of data points"),
+            call. = TRUE, immediate. = FALSE, noBreaks. = FALSE,
+            domain = NULL)
+  }
+}
+
 ################################################################################
 ## Make function for plotting
 
@@ -442,4 +514,51 @@ checkWindowLim <- function(Dataset, includechr = TRUE, exceptchr = NULL){
     mutate(maxW = floor(SNPs/2)) -> tablecounts
 
   return(tablecounts)
+}
+
+################################################################################
+# Adding the loci within a window instead of smoothing
+
+cybrBSA_GLM_window <-  function(lrP, chr = "II", windowsize = 5000, formula = "PAllele~Bulk*Parent",
+                                resultscol = c("Intercept", "Bulk", "Parent", "Interaction")){
+  require(stringr)
+  if(identical(grep(" ", formula), integer(0)) == FALSE){return(print("Remove spaces from formula or use cybrBSA_GLM()"))}
+
+
+  lrP <- subset(lrP, CHROM == chr)
+
+  AllResults <- list()
+  for(c in unique(lrP$CHROM)){
+    lrP <- subset(lrP, CHROM == c)
+    #Run the glm on that chromosome
+    Results <- foreach (i=unique(lrP$POS), .combine=rbind) %dopar% {
+      windowdata <- lrP[lrP$POS < (i+windowsize) & lrP$POS > (i-windowsize),]
+
+      #Convert to sum of counts
+      mycols <- unlist(str_split(unlist(str_split(formula, pattern = c("~"))), pattern = "\\*"))
+      windowdata %>% group_by(.[mycols]) %>% summarize(ReadCount = sum(ReadCount)) -> windowdata
+
+      res <- suppressWarnings(glm(as.formula(formula),
+                                  weights = ReadCount,
+                                  family = binomial,
+                                  data = windowdata))
+
+      #Output of foreach automatically binds rows of what is printed
+      c(c, i, summary(res)$coefficients[((length(summary(res)$coefficients)/2)+1):(length(summary(res)$coefficients) - length(summary(res)$coefficients)/4)])
+    }
+
+    resnames <- suppressWarnings(glm(as.formula(formula), weights = ReadCount, family = binomial, data = lrP[lrP$POS == unique(lrP$POS)[1],]))
+
+    #Format the results for the next function
+    Results <- as.data.frame(Results)
+    colnames(Results) <- c("CHROM", "POS", names(resnames$coefficients))
+    #colnames(Results) <- c("CHROM", "POS", resultscol)
+
+    for(i in 2:length(colnames(Results))){
+      Results[,i] <- as.numeric(Results[,i])
+    }
+    Results %>% arrange(POS) -> Results
+  }
+  return(Results)
+
 }
